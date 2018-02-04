@@ -1,0 +1,13 @@
+---
+- name: Test my raspberry cluster
+  hosts: pi-cluster
+  remote_user: pi
+
+  tasks:
+  - name: Check Rasp model
+    command: cat /proc/device-tree/model
+    register: piversion
+  - name: Debug each entry of my hosts
+    debug:
+      msg: "System {{ inventory_hostname }} is a {{ piversion.stdout }}"
+    
