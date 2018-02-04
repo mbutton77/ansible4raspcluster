@@ -3,6 +3,7 @@ A collection of Ansible playbook I'm using to learn new subjects.
 
 For now, I'm using an inventory with the following groups :
 
+<pre>
 [pi-cluster]
 192.168.0.23[1:4]
 
@@ -13,3 +14,6 @@ For now, I'm using an inventory with the following groups :
 192.168.0.232
 192.168.0.233
 192.168.0.234
+</pre>
+
+The IP adresses are, of course, to be changed accordingly.
