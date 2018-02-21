@@ -1,0 +1,156 @@
+---
+- name: Set Kafka up on the RPi cluster
+  hosts: pi-cluster
+  remote_user: pi
+
+  tasks:
+    - block:
+      - name: (INSTALL) Checking if Java is already installed
+        stat:
+          path: "/opt/{{ java_version }}"
+        register: javadir
+      - name: (INSTALL) Checking if Kafka is already installed
+        stat:
+          path: "/opt/{{ kafka_version }}"
+        register: kafkadir
+      - name: (INSTALL) Unarchiving Java and Kafka
+        unarchive:
+          src: "{{ item }}"
+          dest: /opt
+          owner: pi
+          group: pi
+          mode: 0755
+        with_items:
+          - "{{ java_installer_path }}"
+          - "{{ kafka_installer_path }}"
+        when: javadir.stat.exists == false or kafkadir.stat.exists == false
+      - name: (INSTALL) Fixing permissions for Java (unarchive user/group modification does not work with that one)
+        file:
+          path: /opt/{{ java_version }}
+          owner: pi
+          group: pi
+          mode: 0755
+          recurse: yes
+        when: javadir.stat.exists == false
+      - name: (INSTALL) Adding symbolic link for Java
+        file:
+          src: "/opt/{{ java_version }}/bin/java"
+          dest: /usr/bin/java
+          owner: pi
+          group: pi
+          state: link
+        when: javadir.stat.exists == false
+      - name: (INSTALL) Removing Kafka "windows" directory
+        file:
+          path: "/opt/{{ kafka_version }}/bin/windows"
+          state: absent
+        when: kafkadir.stat.exists == false
+      - name: (BACKUP) Checking if previous config backups already exist
+        stat:
+          path: "{{ item }}"
+        register: backup
+        with_items:
+          - "{{ zookeper_config }}.original"
+          - "{{ kafka_config }}.original"
+      - debug:
+          var: backup
+      - name: (BACKUP) Making backup copies of the zookeper and kafka config files, if never been backed up before
+        copy:
+          src: "{{ item }}"
+          dest: "{{ item }}.original"
+          owner: pi
+          group: pi
+          mode: 0755
+          remote_src: yes
+        with_items:
+          - "{{ zookeper_config }}"
+          - "{{ kafka_config }}"
+        when: backup.results[0].stat.exists == false
+      - name: (BACKUP) Restoring original file to be truly idempotent
+        copy:
+          src: "{{ item }}.original"
+          dest: "{{ item }}"
+          remote_src: true
+        with_items:
+          - "{{ zookeper_config }}"
+          - "{{ kafka_config }}"
+        when: backup.results[0].stat.exists == true
+      - name: (ZOOKEEPER CONFIG) Creating zookeeper work directory
+        file:
+          path: /var/zookeeper
+          owner: pi
+          group: pi
+          state: directory
+          mode: 0755
+      - name: (ZOOKEEPER CONFIG) Replacing the default config which sets the zookeeper workdir under var
+        lineinfile:
+          path: "{{ zookeper_config }}"
+          regexp: '^dataDir=.*$'
+          line: 'dataDir={{ zookeeper_workdir }}'
+      - name: (ZOOKEEPER CONFIG) Adding useful configuration
+        lineinfile:
+          path: "{{ zookeper_config }}"
+          line: "{{ item }}"
+          insertafter: EOF
+        with_items:
+          - "tickTime=2000"
+          - "initLimit=10"
+          - "syncLimit=5"
+      - name: (ZOOKEEPER CONFIG) Adding cluster nodes to the zookeeper configuration
+        lineinfile:
+          path: "{{ zookeper_config }}"
+          line: "server.{{ item[-1] }}={{ item + ':2888:3888' }}"
+          insertafter: EOF
+        with_items:
+          - "{{ groups['pi-cluster'] }}"
+      - name: (ZOOKEEPER CONFIG) Removing a previous idFile
+        file:
+          path: "{{ zookeeper_workdir }}/myid"
+          state: absent
+      - name: (ZOOKEEPER CONFIG) Creating zookeeper id file
+        file:
+          path: "{{ zookeeper_workdir }}/myid"
+          state: touch
+          owner: pi
+          group: pi
+          mode: 0755
+      - name: (ZOOKEEPER CONFIG) Filling id file with respecting id
+        lineinfile:
+          path: "{{ zookeeper_workdir }}/myid"
+          line: "{{ inventory_hostname[-1] }}"
+          insertafter: EOF
+      - name: (KAFKA CONFIG) Defining the broker ID
+        lineinfile:
+          path: "{{ kafka_config }}"
+          regexp: '^broker.id=.*$'
+          line: 'broker.id={{ inventory_hostname[-1] }}'
+      - name: (KAFKA CONFIG) Setting the listen address
+        lineinfile:
+          path: "{{ kafka_config }}"
+          regexp: '^#listeners=.*$'
+          line: 'listeners=PLAINTEXT://{{ inventory_hostname }}:9092'
+      - name: (KAFKA CONFIG) Setting the zookeeper cluster address
+        lineinfile:
+          path: "{{ kafka_config }}"
+          regexp: '^zookeeper.connect=.*$'
+          line: 'zookeeper.connect={{ zookeeper_cluster_address }}'
+      - name: (STARTUP) Starting ZooKeeper
+        shell: "nohup /opt/{{ kafka_version }}/bin/zookeeper-server-start.sh {{ zookeper_config }} &"
+        async: 10
+        poll: 0
+      - name: (STARTUP) Starting Kafka
+        shell: "nohup /opt/{{ kafka_version }}/bin/kafka-server-start.sh {{ kafka_config }} &"
+        async: 10
+        poll: 0
+
+      become: true
+      vars:
+        installer_dir: "/Users/papa/Pro/kafka"
+        java_version: "jdk1.8.0_162"
+        kafka_version: "kafka_2.11-1.0.0"
+        java_installer_path: "{{ installer_dir }}/jdk-8u162-linux-arm32-vfp-hflt.tar.gz"
+        kafka_installer_path: "{{ installer_dir }}/{{ kafka_version }}.tgz"
+        zookeper_config: "/opt/{{ kafka_version }}/config/zookeeper.properties"
+        kafka_config: "/opt/{{ kafka_version }}/config/server.properties"
+        zookeeper_workdir: "/var/zookeeper"
+        zookeeper_cluster_address: "{{ groups['pi-cluster'] | join(':2181,') }}:2181"
